@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>EquiScore — Launching...</title>
+  <script src="https://cdn.jsdelivr.net/npm/fhirclient@2.5.2/build/fhir-client.js"></script>
+</head>
+<body>
+  <script>
+    FHIR.oauth2.authorize({
+      client_id: "equiprs_app",
+      scope: "launch patient/Patient.read patient/Observation.read patient/Condition.read patient/MedicationRequest.read openid fhirUser",
+      redirect_uri: window.location.origin + window.location.pathname.replace("launch.html", "index.html")
+    });
+  </script>
+</body>
+</html>
