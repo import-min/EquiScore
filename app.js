@@ -77,9 +77,10 @@ function getRelevantScores(conditions, observations, ancestryGroup) {
   const activeLabCodes = new Set();
 
   (conditions || []).forEach(c => {
-    if (c.resource && c.resource.clinicalStatus) {
+    if (c.resource) {
       const status = c.resource.clinicalStatus?.coding?.[0]?.code;
-      if (status === "active" || status === "chronic") {
+      // Include active, recurrence, relapse, and conditions with no status
+      if (!status || status === "active" || status === "recurrence" || status === "relapse" || status === "chronic") {
         const coding = c.resource.code?.coding || [];
         coding.forEach(code => {
           activeConditionCodes.add(code.code);
