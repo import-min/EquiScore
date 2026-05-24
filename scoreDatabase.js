@@ -38,7 +38,10 @@ const SCORE_DATABASE = {
     triggerConditions: [
       { system: "http://snomed.info/sct", code: "44054006", display: "Diabetes mellitus type 2" },
       { system: "http://snomed.info/sct", code: "38341003", display: "Hypertension" },
+      { system: "http://snomed.info/sct", code: "59621000", display: "Essential hypertension" },
       { system: "http://snomed.info/sct", code: "13644009", display: "Hypercholesterolaemia" },
+      { system: "http://snomed.info/sct", code: "55822004", display: "Hyperlipidemia" },
+      { system: "http://snomed.info/sct", code: "370992007", display: "Dyslipidemia" },
       { system: "http://hl7.org/fhir/sid/icd-10", code: "I10", display: "Essential hypertension" },
       { system: "http://hl7.org/fhir/sid/icd-10", code: "E11", display: "Type 2 diabetes" }
     ],
