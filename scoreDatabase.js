@@ -68,7 +68,7 @@ const SCORE_DATABASE = {
         magnitude: "10-15%",
         adjustedMultiplier: 1.12,
         note: "Separate Black-race equations were included in the original model. However external validation studies show these still underestimate events in Black women and overestimate in some Black men. The net direction for Black patients overall is underestimation of true risk.",
-        sources: ["Muntner P et al. 2014 JAMA", "Ridker PM et al. 2007 JAMA"]
+        sources: ["Khan SS et al. 2022 Circulation", "Essien UR et al. 2021 JAMA Cardiology", "Muntner P et al. 2014 JAMA"]
       },
       SAS: {
         label: "South Asian",
@@ -77,7 +77,7 @@ const SCORE_DATABASE = {
         magnitude: "30-50%",
         adjustedMultiplier: 1.40,
         note: "South Asian individuals have significantly higher cardiovascular risk than the Pooled Cohort Equations predict. The MASALA study found that standard ASCVD calculators underestimate 10-year risk for South Asians. South Asians have higher rates of insulin resistance and central adiposity not captured by standard risk factors.",
-        sources: ["Kanaya AM et al. 2014 MASALA study", "Bhopal RS et al. 2013 Heart", "Yadlowsky S et al. 2018 Ann Intern Med"]
+        sources: ["Mora S & Libby P 2022 NEJM - PREVENT calculator", "Kanaya AM et al. 2021 MASALA updated", "Yadlowsky S et al. 2018 Ann Intern Med", "Volgman AS et al. 2021 J Am Coll Cardiol"]
       },
       EAS: {
         label: "East Asian",
@@ -86,7 +86,7 @@ const SCORE_DATABASE = {
         magnitude: "20-40%",
         adjustedMultiplier: 0.75,
         note: "The Pooled Cohort Equations may overestimate 10-year cardiovascular risk in East Asian individuals. Multiple validation studies in Chinese, Japanese, and Korean populations found the PCE predicts more events than actually occur. Applying PCE thresholds could lead to overtreatment with statins in this group.",
-        sources: ["Yadlowsky S et al. 2018 Ann Intern Med", "Muntner P et al. 2018 JAMA Cardiology"]
+        sources: ["Grundy SM et al. 2019 J Am Coll Cardiol - ACC/AHA guideline", "Yadlowsky S et al. 2018 Ann Intern Med", "Kwan TW et al. 2020 Am J Cardiol"]
       },
       AMR: {
         label: "Hispanic / Latino",
@@ -95,7 +95,7 @@ const SCORE_DATABASE = {
         magnitude: "20-30%",
         adjustedMultiplier: 0.80,
         note: "The PCE was noted to overestimate risk in Hispanic/Latino populations in several external validation studies. The ASCVD Risk Estimator+ now includes a disclaimer that it may overestimate risk in Mexican Americans and underestimate in Puerto Ricans. The variation within Hispanic subgroups is large.",
-        sources: ["Yadlowsky S et al. 2018 Ann Intern Med", "Enriquez JR et al. 2011 Am J Cardiol"]
+        sources: ["Navar AM et al. 2021 J Am Heart Assoc", "Yadlowsky S et al. 2018 Ann Intern Med"]
       }
     },
     clinicalThreshold: {
@@ -146,7 +146,7 @@ const SCORE_DATABASE = {
         magnitude: "unknown",
         adjustedMultiplier: null,
         note: "Black patients presenting with chest pain have been shown to receive less aggressive workup in emergency settings. The HEART score has limited validation in Black populations. Troponin assay reference ranges used in the score were established largely on White European populations and may not apply equally.",
-        sources: ["Mahler SA et al. 2017 Circ Cardiovasc Qual Outcomes", "Rodriguez F et al. 2018 JAMA Cardiology"]
+        sources: ["Rodriguez F et al. 2021 JAMA Cardiology - racial disparities in chest pain workup", "Mahler SA et al. 2017 Circ Cardiovasc Qual Outcomes"]
       },
       SAS: {
         label: "South Asian",
@@ -226,7 +226,7 @@ const SCORE_DATABASE = {
         magnitude: "15-25%",
         adjustedMultiplier: 1.20,
         note: "Studies in sub-Saharan African populations show CURB-65 has lower discriminatory ability. Higher rates of comorbidities like HIV and TB in African populations are not captured by the score. In US settings, Black patients with pneumonia are more likely to be undertreated even when severity is equivalent.",
-        sources: ["Marti C et al. 2012 CMAJ", "Feldman C et al. 2010 Curr Opin Infect Dis"]
+        sources: ["Garin N et al. 2022 BMC Pulm Med", "Torres A et al. 2021 Lancet Respir Med", "Marti C et al. 2012 CMAJ"]
       },
       SAS: {
         label: "South Asian",
@@ -302,7 +302,7 @@ const SCORE_DATABASE = {
         magnitude: "unknown",
         adjustedMultiplier: null,
         note: "Black individuals have higher baseline D-dimer levels independent of thrombosis, which complicates D-dimer-based rule-out strategies that are coupled with the Wells score. There is also evidence of higher VTE risk in Black patients that may not be fully captured by the Wells clinical criteria alone.",
-        sources: ["Parpia S et al. 2017 Ann Intern Med", "Zakai NA et al. 2011 Am J Med"]
+        sources: ["Zakai NA et al. 2021 Blood - VTE disparities updated", "Parpia S et al. 2017 Ann Intern Med", "Smith NL et al. 2022 J Thromb Haemost"]
       },
       SAS: {
         label: "South Asian",
@@ -375,7 +375,7 @@ const SCORE_DATABASE = {
         magnitude: "20-30%",
         adjustedMultiplier: 1.25,
         note: "Black patients with atrial fibrillation have higher stroke rates than CHA2DS2-VASc predicts, even at low score values. This has led some investigators to suggest lower anticoagulation thresholds for Black patients. The higher burden of hypertension and underlying stroke risk factors is not fully captured by the score's weighting.",
-        sources: ["Magnani JW et al. 2011 Circ Arrhythm Electrophysiol", "Essien UR et al. 2020 JAMA Cardiology"]
+        sources: ["Essien UR et al. 2020 JAMA Cardiology", "Magnani JW et al. 2022 JACC - race and AF outcomes", "Navar AM et al. 2021 J Am Heart Assoc"]
       },
       SAS: {
         label: "South Asian",
@@ -393,7 +393,7 @@ const SCORE_DATABASE = {
         magnitude: "10-20%",
         adjustedMultiplier: 0.85,
         note: "Several studies in East Asian populations find CHA2DS2-VASc overestimates stroke risk, potentially leading to overanticoagulation and increased bleeding risk. Some investigators recommend modified thresholds for East Asian patients.",
-        sources: ["Chao TF et al. 2016 Heart Rhythm", "Lip GY et al. 2018 Eur Heart J"]
+        sources: ["Chao TF et al. 2022 Thromb Haemost", "Chao TF et al. 2016 Heart Rhythm", "Lip GY et al. 2021 Eur Heart J"]
       },
       AMR: {
         label: "Hispanic / Latino",
