@@ -1,348 +1,283 @@
-/**
- * app.js — EquiScore
- * SMART on FHIR app that surfaces equity flags on clinical risk scores.
- *
- * Uses React (loaded from CDN), fhirclient.js (loaded from CDN), and
- * the scoreDatabase.js file in this same directory.
- *
- * No build step required.
- */
+const { useState, useEffect } = React;
 
-const { useState, useEffect, useCallback } = React;
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
+// ── Ancestry detection ─────────────────────────────────────────────────────
 function getAncestryFromPatient(patient) {
   const extensions = patient.extension || [];
-  let ancestryGroup = null;
-  let ancestryLabel = null;
 
-  // US Core Race Extension
-  const raceExt = extensions.find(e =>
-    e.url === "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race"
-  );
-
-  // US Core Ethnicity Extension
   const ethnicityExt = extensions.find(e =>
     e.url === "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity"
   );
-
-  // Check ethnicity first - Hispanic overrides race for our purposes
   if (ethnicityExt) {
-    const ombEthnicity = (ethnicityExt.extension || []).find(e => e.url === "ombCategory");
-    if (ombEthnicity && ombEthnicity.valueCoding) {
-      const code = ombEthnicity.valueCoding.code;
-      const mapped = ETHNICITY_CODE_MAP[code];
-      if (mapped) {
-        ancestryGroup = mapped;
-        ancestryLabel = ombEthnicity.valueCoding.display || "Hispanic or Latino";
-        return { group: ancestryGroup, label: ancestryLabel, source: "ethnicity" };
-      }
+    const omb = (ethnicityExt.extension || []).find(e => e.url === "ombCategory");
+    if (omb?.valueCoding?.code === "2135-2") {
+      return { group: "AMR", label: "Hispanic or Latino", source: "ethnicity" };
     }
   }
 
-  // Then race
+  const raceExt = extensions.find(e =>
+    e.url === "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race"
+  );
   if (raceExt) {
-    const ombRace = (raceExt.extension || []).find(e => e.url === "ombCategory");
-    if (ombRace && ombRace.valueCoding) {
-      const code = ombRace.valueCoding.code;
+    const omb = (raceExt.extension || []).find(e => e.url === "ombCategory");
+    if (omb?.valueCoding) {
+      const code = omb.valueCoding.code;
       const mapped = RACE_CODE_MAP[code];
       if (mapped && mapped !== "OTHER") {
-        ancestryGroup = mapped;
-        ancestryLabel = ombRace.valueCoding.display || code;
-
-        // Look for detailed coding within Asian
+        let group = mapped;
+        let label = omb.valueCoding.display || code;
         if (mapped === "EAS" || mapped === "SAS") {
-          const detailed = (raceExt.extension || []).find(e => e.url === "detailed");
-          if (detailed && detailed.valueCoding) {
-            const detCode = detailed.valueCoding.code;
-            const detMapped = RACE_CODE_MAP[detCode];
-            if (detMapped) {
-              ancestryGroup = detMapped;
-              ancestryLabel = detailed.valueCoding.display || ancestryLabel;
-            }
+          const det = (raceExt.extension || []).find(e => e.url === "detailed");
+          if (det?.valueCoding?.code && RACE_CODE_MAP[det.valueCoding.code]) {
+            group = RACE_CODE_MAP[det.valueCoding.code];
+            label = det.valueCoding.display || label;
           }
         }
-        return { group: ancestryGroup, label: ancestryLabel, source: "race" };
+        return { group, label, source: "race" };
       }
     }
   }
-
   return { group: null, label: "Not recorded", source: "none" };
 }
 
+// ── Score matching ─────────────────────────────────────────────────────────
 function getRelevantScores(conditions, observations, ancestryGroup) {
-  const activeConditionCodes = new Set();
-  const activeConditionDisplays = [];
-  const activeLabCodes = new Set();
+  const condCodes = new Set();
+  const labCodes = new Set();
 
   (conditions || []).forEach(c => {
     if (c.resource) {
       const status = c.resource.clinicalStatus?.coding?.[0]?.code;
-      // Include active, recurrence, relapse, and conditions with no status
-      if (!status || status === "active" || status === "recurrence" || status === "relapse" || status === "chronic") {
-        const coding = c.resource.code?.coding || [];
-        coding.forEach(code => {
-          activeConditionCodes.add(code.code);
-          if (code.display) activeConditionDisplays.push(code.display);
-        });
+      if (!status || ["active","recurrence","relapse","chronic"].includes(status)) {
+        (c.resource.code?.coding || []).forEach(cd => condCodes.add(cd.code));
       }
     }
   });
 
   (observations || []).forEach(o => {
     if (o.resource) {
-      const coding = o.resource.code?.coding || [];
-      coding.forEach(code => {
-        if (code.system === "http://loinc.org") {
-          activeLabCodes.add(code.code);
-        }
-      });
+      (o.resource.code?.coding || [])
+        .filter(cd => cd.system === "http://loinc.org")
+        .forEach(cd => labCodes.add(cd.code));
     }
   });
 
-  const relevantScores = [];
-
-  Object.values(SCORE_DATABASE).forEach(score => {
-    let matchReason = null;
-
-    // Check if any trigger condition matches
-    const conditionMatch = score.triggerConditions.find(tc =>
-      activeConditionCodes.has(tc.code)
-    );
-    if (conditionMatch) matchReason = `Active condition: ${conditionMatch.display}`;
-
-    // Check if any trigger lab matches
-    if (!matchReason) {
-      const labMatch = score.triggerLabs.find(tl =>
-        activeLabCodes.has(tl.loinc)
-      );
-      if (labMatch) matchReason = `Recent lab: ${labMatch.name}`;
-    }
-
-    if (matchReason) {
-      const ancestryInfo = ancestryGroup
-        ? (score.ancestryData[ancestryGroup] || score.ancestryData["EUR"])
-        : null;
-
-      relevantScores.push({
+  return Object.values(SCORE_DATABASE)
+    .map(score => {
+      const condMatch = score.triggerConditions.find(tc => condCodes.has(tc.code));
+      const labMatch  = !condMatch && score.triggerLabs.find(tl => labCodes.has(tl.loinc));
+      if (!condMatch && !labMatch) return null;
+      return {
         score,
-        matchReason,
-        ancestryInfo,
-        ancestryGroup
-      });
-    }
-  });
-
-  return relevantScores;
+        matchReason: condMatch
+          ? `Active condition: ${condMatch.display}`
+          : `Recent lab: ${labMatch.name}`,
+        ancestryInfo: ancestryGroup
+          ? (score.ancestryData[ancestryGroup] || score.ancestryData["EUR"])
+          : null,
+        ancestryGroup,
+        allGroups: score.ancestryData
+      };
+    })
+    .filter(Boolean);
 }
 
-function calculateAge(birthDate) {
-  if (!birthDate) return null;
-  const today = new Date();
-  const birth = new Date(birthDate);
-  let age = today.getFullYear() - birth.getFullYear();
-  const m = today.getMonth() - birth.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
-  return age;
+function calcAge(dob) {
+  if (!dob) return null;
+  const d = new Date(dob), t = new Date();
+  let a = t.getFullYear() - d.getFullYear();
+  if (t.getMonth() < d.getMonth() || (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())) a--;
+  return a;
 }
 
-// ── Components ─────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────
 
-function LoadingScreen({ message }) {
-  return React.createElement("div", { className: "loading-screen" },
-    React.createElement("div", { className: "loading-content" },
-      React.createElement("div", { className: "loading-spinner" }),
-      React.createElement("p", { className: "loading-message" }, message)
-    )
+function Spinner({ msg }) {
+  return React.createElement("div", { className: "screen-center" },
+    React.createElement("div", { className: "spinner" }),
+    React.createElement("p", { className: "spinner-label" }, msg)
   );
 }
 
-function ErrorScreen({ error }) {
-  return React.createElement("div", { className: "error-screen" },
-    React.createElement("div", { className: "error-content" },
-      React.createElement("div", { className: "error-icon" }, "⚠"),
+function ErrorView({ error }) {
+  return React.createElement("div", { className: "screen-center screen-dark" },
+    React.createElement("div", { className: "error-box" },
+      React.createElement("div", { className: "error-icon-ring" }, "!"),
       React.createElement("h2", null, "Connection Error"),
       React.createElement("p", null, error),
-      React.createElement("p", { className: "error-hint" },
-        "Make sure you launched this app from a SMART sandbox. ",
-        React.createElement("a", {
-          href: "https://launch.smarthealthit.org/?launch_url=" + encodeURIComponent(window.location.origin + window.location.pathname.replace("index.html", "launch.html")) + "&launch=WzAsInNtYXJ0LXBhdGllbnQtbGF1bmNoLWtleSIsIiIsIiIsIiIsIiIsIiIsIiIsZmFsc2UsZmFsc2UsZmFsc2UsW10sW10sW10sMF0",
-          target: "_blank"
-        }, "Click here to launch from SMART sandbox")
-      )
+      React.createElement("a", {
+        className: "relaunch-link",
+        href: `https://launch.smarthealthit.org/?launch_url=${encodeURIComponent("https://import-min.github.io/EquiScore/launch.html")}`,
+        target: "_blank"
+      }, "Relaunch from SMART sandbox")
     )
   );
 }
 
-function PatientHeader({ patient, ancestry }) {
-  const age = calculateAge(patient.birthDate);
-  const name = patient.name?.[0];
-  const fullName = name
-    ? `${name.given?.join(" ") || ""} ${name.family || ""}`.trim()
-    : "Unknown Patient";
-  const gender = patient.gender
-    ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1)
-    : "Unknown";
+function PatientBar({ patient, ancestry }) {
+  const age = calcAge(patient.birthDate);
+  const n = patient.name?.[0];
+  const name = n ? `${(n.given||[]).join(" ")} ${n.family||""}`.trim() : "Unknown";
+  const gender = patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1) : "—";
+  const initials = name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
 
-  return React.createElement("div", { className: "patient-header" },
-    React.createElement("div", { className: "patient-avatar" },
-      fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
-    ),
-    React.createElement("div", { className: "patient-info" },
-      React.createElement("h1", { className: "patient-name" }, fullName),
+  return React.createElement("div", { className: "patient-bar" },
+    React.createElement("div", { className: "patient-avatar" }, initials),
+    React.createElement("div", { className: "patient-details" },
+      React.createElement("div", { className: "patient-name" }, name),
       React.createElement("div", { className: "patient-meta" },
-        React.createElement("span", null, `${age ? age + " yrs" : "Age unknown"}`),
-        React.createElement("span", { className: "separator" }, "·"),
-        React.createElement("span", null, gender),
-        React.createElement("span", { className: "separator" }, "·"),
-        React.createElement("span", null,
-          React.createElement("strong", null, "Ancestry: "),
+        [
+          age ? `${age} yrs` : null,
+          gender,
           ancestry.label !== "Not recorded"
             ? ancestry.label
-            : React.createElement("span", { className: "not-recorded" }, "Not recorded in EHR")
-        )
+            : React.createElement("span", { className: "ancestry-missing" }, "Ancestry not recorded")
+        ]
+        .filter(Boolean)
+        .reduce((acc, item, i) => i === 0 ? [item] : [...acc, React.createElement("span", { key: i, className: "dot" }, "·"), item], [])
       )
     )
   );
 }
 
-function BiasLevelBadge({ bias }) {
-  const config = {
-    reference: { className: "badge-reference", text: "Reference population" },
-    low: { className: "badge-low", text: "Low concern" },
-    moderate: { className: "badge-moderate", text: "Moderate concern" },
-    significant: { className: "badge-significant", text: "Significant concern" },
-    variable: { className: "badge-variable", text: "Variable — limited data" }
+function BiasPill({ bias }) {
+  const map = {
+    reference: ["pill-green", "Reference population"],
+    low:       ["pill-blue",  "Limited data"],
+    moderate:  ["pill-amber", "Moderate concern"],
+    significant:["pill-red",  "Significant concern"],
+    variable:  ["pill-purple","Variable — limited data"],
   };
-  const { className, text } = config[bias] || config.low;
-  return React.createElement("span", { className: `badge ${className}` }, text);
+  const [cls, text] = map[bias] || map.low;
+  return React.createElement("span", { className: `pill ${cls}` }, text);
 }
 
-function ScoreCard({ scoreData }) {
-  const { score, matchReason, ancestryInfo, ancestryGroup } = scoreData;
-  const [expanded, setExpanded] = useState(false);
+function ComparativeTable({ allGroups, patientGroup }) {
+  const rows = Object.entries(allGroups)
+    .filter(([g]) => g !== "EUR" || patientGroup !== "EUR")
+    .map(([g, d]) => {
+      const isPatient = g === patientGroup;
+      const dirText = d.bias === "reference" ? "—"
+        : d.direction === "underestimate" ? "Underestimates risk"
+        : d.direction === "overestimate"  ? "Overestimates risk"
+        : "Variable / unknown";
+      return React.createElement("tr", { key: g, className: isPatient ? "row-highlight" : "" },
+        React.createElement("td", null, d.label),
+        React.createElement("td", null, React.createElement(BiasPill, { bias: d.bias })),
+        React.createElement("td", null, dirText),
+        React.createElement("td", null, d.magnitude || "—")
+      );
+    });
 
-  const isReference = ancestryInfo?.bias === "reference";
-  const hasConcern = ancestryInfo && !isReference && ancestryInfo.bias !== "low";
-  const isUnknown = !ancestryGroup || ancestryGroup === "OTHER";
-
-  let cardClass = "score-card";
-  if (isUnknown) cardClass += " card-unknown";
-  else if (hasConcern) cardClass += " card-concern";
-  else if (isReference) cardClass += " card-reference";
-  else cardClass += " card-low";
-
-  return React.createElement("div", { className: cardClass },
-
-    // Header
-    React.createElement("div", { className: "card-header" },
-      React.createElement("div", { className: "card-title-row" },
-        React.createElement("h3", { className: "card-title" }, score.shortName),
-        React.createElement("span", { className: "card-specialty" }, score.specialty)
-      ),
-      ancestryInfo && React.createElement(BiasLevelBadge, { bias: ancestryInfo.bias })
-    ),
-
-    // Match reason
-    React.createElement("p", { className: "match-reason" },
-      React.createElement("span", { className: "match-icon" }, "🔍"),
-      " Triggered by: ", matchReason
-    ),
-
-    // Score purpose
-    React.createElement("p", { className: "score-purpose" }, score.purpose),
-
-    // Equity finding
-    !isUnknown && ancestryInfo && !isReference
-      ? React.createElement("div", {
-          className: `equity-finding ${hasConcern ? "finding-concern" : "finding-low"}`
-        },
-        React.createElement("div", { className: "finding-header" },
-          React.createElement("span", { className: "finding-icon" },
-            hasConcern ? "⚠️" : "ℹ️"
-          ),
-          React.createElement("strong", null,
-            hasConcern
-              ? `This score may ${ancestryInfo.direction === "underestimate"
-                  ? "UNDERESTIMATE" : ancestryInfo.direction === "overestimate"
-                  ? "OVERESTIMATE" : "not accurately estimate"} risk for ${ancestryInfo.label} patients`
-              : `Limited validation data for ${ancestryInfo.label} patients`
-          )
-        ),
-        ancestryInfo.magnitude && React.createElement("p", { className: "finding-magnitude" },
-          `Published bias: approximately `, React.createElement("strong", null, ancestryInfo.magnitude)
-        ),
-        React.createElement("p", { className: "finding-note" }, ancestryInfo.note)
-      )
-      : isUnknown
-      ? React.createElement("div", { className: "equity-finding finding-unknown" },
-          React.createElement("span", { className: "finding-icon" }, "ℹ️"),
-          " Patient ancestry not recorded in EHR. Equity analysis requires race/ethnicity documentation using US Core standards."
+  return React.createElement("div", { className: "comp-table-wrap" },
+    React.createElement("p", { className: "comp-label" }, "How this score performs across ancestry groups:"),
+    React.createElement("table", { className: "comp-table" },
+      React.createElement("thead", null,
+        React.createElement("tr", null,
+          ["Ancestry group", "Concern level", "Direction", "Published magnitude"]
+          .map(h => React.createElement("th", { key: h }, h))
         )
-      : React.createElement("div", { className: "equity-finding finding-reference" },
-          React.createElement("span", { className: "finding-icon" }, "✅"),
-          ` This score was developed and validated primarily on ${ancestryInfo?.label || "this patient's ancestry group"}.`
-        ),
+      ),
+      React.createElement("tbody", null, rows)
+    )
+  );
+}
 
-    // Development cohort info
-    React.createElement("div", { className: "dev-cohort" },
-      React.createElement("strong", null, "Development cohort: "),
-      score.devCohort.description,
-      ` (${score.devCohort.percentWhite}% White, ${score.devCohort.percentBlack}% Black)`
+function ScoreCard({ sd }) {
+  const { score, matchReason, ancestryInfo, ancestryGroup, allGroups } = sd;
+  const [showSources, setShowSources] = useState(false);
+  const [showTable, setShowTable]   = useState(false);
+
+  const isRef  = ancestryInfo?.bias === "reference";
+  const isUnk  = !ancestryGroup || ancestryGroup === "OTHER";
+  const hasConcern = !isRef && !isUnk && (ancestryInfo?.bias === "moderate" || ancestryInfo?.bias === "significant");
+
+  let cardMod = "";
+  if (isUnk) cardMod = "card-unknown";
+  else if (hasConcern) cardMod = "card-concern";
+  else if (isRef) cardMod = "card-ref";
+  else cardMod = "card-low";
+
+  return React.createElement("div", { className: `card ${cardMod}` },
+
+    React.createElement("div", { className: "card-head" },
+      React.createElement("div", null,
+        React.createElement("div", { className: "card-title" }, score.shortName),
+        React.createElement("div", { className: "card-specialty" }, score.specialty)
+      ),
+      ancestryInfo && React.createElement(BiasPill, { bias: ancestryInfo.bias })
+    ),
+
+    React.createElement("div", { className: "trigger-row" },
+      React.createElement("span", { className: "trigger-dot" }),
+      React.createElement("span", { className: "trigger-text" }, matchReason)
+    ),
+
+    React.createElement("p", { className: "card-purpose" }, score.purpose),
+
+    // Main finding
+    !isUnk && ancestryInfo && !isRef &&
+      React.createElement("div", { className: `finding finding-${hasConcern ? "concern" : "low"}` },
+        React.createElement("div", { className: "finding-title" },
+          hasConcern ? "Equity concern for this patient" : "Limited validation data"
+        ),
+        hasConcern && ancestryInfo.magnitude &&
+          React.createElement("div", { className: "finding-magnitude" },
+            `Estimated bias: `, React.createElement("strong", null, ancestryInfo.magnitude),
+            ` — score likely `,
+            React.createElement("strong", null,
+              ancestryInfo.direction === "underestimate" ? "underestimates" : "overestimates"
+            ),
+            " risk for this patient."
+          ),
+        React.createElement("p", { className: "finding-note" }, ancestryInfo.note)
+      ),
+
+    isRef && React.createElement("div", { className: "finding finding-ref" },
+      React.createElement("div", { className: "finding-title" }, "Development population match"),
+      React.createElement("p", { className: "finding-note" },
+        `${score.shortName} was developed and validated primarily on ${ancestryInfo.label} patients. Score performance should be well-calibrated for this individual.`
+      )
+    ),
+
+    isUnk && React.createElement("div", { className: "finding finding-unknown" },
+      React.createElement("div", { className: "finding-title" }, "Ancestry not documented"),
+      React.createElement("p", { className: "finding-note" },
+        "Patient ancestry is not recorded using US Core standards. Document race and ethnicity to enable patient-specific equity analysis."
+      )
+    ),
+
+    // Development cohort
+    React.createElement("div", { className: "meta-row" },
+      React.createElement("span", { className: "meta-label" }, "Development cohort:"),
+      ` ${score.devCohort.description} — ${score.devCohort.percentWhite}% White, ${score.devCohort.percentBlack}% Black`
     ),
 
     // Recommendation
-    React.createElement("div", { className: "recommendation" },
-      React.createElement("strong", null, "Clinical recommendation: "),
-      score.recommendation
+    React.createElement("div", { className: "rec-box" },
+      React.createElement("span", { className: "rec-label" }, "Recommendation"),
+      React.createElement("span", null, score.recommendation)
     ),
 
-    // Expandable sources
-    React.createElement("button", {
-      className: "expand-button",
-      onClick: () => setExpanded(!expanded)
-    }, expanded ? "▲ Hide sources" : "▼ Show sources"),
+    // Comparative table toggle
+    React.createElement("button", { className: "toggle-btn", onClick: () => setShowTable(!showTable) },
+      showTable ? "Hide population comparison" : "Show population comparison"
+    ),
+    showTable && React.createElement(ComparativeTable, { allGroups, patientGroup: ancestryGroup }),
 
-    expanded && ancestryInfo?.sources?.length > 0 && React.createElement("div", { className: "sources" },
-      React.createElement("strong", null, "Published sources:"),
-      React.createElement("ul", null,
+    // Sources toggle
+    React.createElement("button", { className: "toggle-btn", onClick: () => setShowSources(!showSources) },
+      showSources ? "Hide sources" : "Show sources"
+    ),
+    showSources && ancestryInfo?.sources?.length > 0 &&
+      React.createElement("div", { className: "sources-list" },
         ancestryInfo.sources.map((s, i) =>
-          React.createElement("li", { key: i }, s)
+          React.createElement("div", { key: i, className: "source-item" }, s)
         )
-      )
-    ),
+      ),
 
-    // Threshold context
-    React.createElement("div", { className: "threshold-context" },
-      React.createElement("strong", null, "Threshold context: "),
-      score.clinicalThreshold.description
-    )
-  );
-}
-
-function NoScoresFound({ ancestry }) {
-  return React.createElement("div", { className: "no-scores" },
-    React.createElement("div", { className: "no-scores-icon" }, "📋"),
-    React.createElement("h3", null, "No risk score triggers detected"),
-    React.createElement("p", null,
-      "No active conditions or recent labs in this patient's record match the trigger criteria for the clinical risk scores in our database."
-    ),
-    React.createElement("p", null,
-      "Currently monitoring: ASCVD, HEART Score, CURB-65, Wells DVT, CHA₂DS₂-VASc"
-    )
-  );
-}
-
-function AncestryWarning({ ancestry }) {
-  if (ancestry.group) return null;
-  return React.createElement("div", { className: "ancestry-warning" },
-    React.createElement("span", { className: "warning-icon" }, "⚠️"),
-    React.createElement("div", null,
-      React.createElement("strong", null, "Ancestry not documented"),
-      React.createElement("p", null,
-        "Race and ethnicity are not recorded using US Core standards in this patient's FHIR record. Equity analysis cannot be personalized. Documenting race/ethnicity using the US Core Race Extension enables this tool to provide patient-specific guidance."
-      )
+    React.createElement("div", { className: "threshold-row" },
+      React.createElement("span", { className: "meta-label" }, "Clinical threshold:"),
+      ` ${score.clinicalThreshold.description}`
     )
   );
 }
@@ -351,137 +286,105 @@ function SummaryBanner({ relevantScores, ancestry }) {
   const concerns = relevantScores.filter(s =>
     s.ancestryInfo?.bias === "significant" || s.ancestryInfo?.bias === "moderate"
   );
-
   if (concerns.length === 0) return null;
-
-  return React.createElement("div", { className: "summary-banner" },
-    React.createElement("div", { className: "banner-icon" }, "⚠️"),
+  const dir = concerns.some(c => c.ancestryInfo?.direction === "underestimate")
+    ? "may underestimate risk — consider adjusted thresholds or additional workup"
+    : "require clinical review — see individual score notes";
+  return React.createElement("div", { className: "banner-concern" },
+    React.createElement("div", { className: "banner-indicator" }),
     React.createElement("div", null,
       React.createElement("strong", null,
-        `${concerns.length} risk score${concerns.length > 1 ? "s" : ""} flagged for ${ancestry.label} patients`
+        `${concerns.length} score${concerns.length > 1 ? "s" : ""} flagged for ${ancestry.label} patients`
       ),
       React.createElement("p", null,
-        concerns.map(c => c.score.shortName).join(", ") +
-        (concerns.some(c => c.ancestryInfo?.direction === "underestimate")
-          ? " — may underestimate risk. Consider adjusted thresholds."
-          : " — review notes for direction of bias.")
+        `${concerns.map(c => c.score.shortName).join(", ")} ${dir}.`
       )
     )
   );
 }
 
 // ── Main App ───────────────────────────────────────────────────────────────
-
 function App() {
-  const [status, setStatus] = useState("loading");
-  const [errorMsg, setErrorMsg] = useState(null);
-  const [patient, setPatient] = useState(null);
-  const [ancestry, setAncestry] = useState({ group: null, label: "Not recorded", source: "none" });
-  const [relevantScores, setRelevantScores] = useState([]);
-  const [lastUpdated, setLastUpdated] = useState(null);
+  const [phase, setPhase]  = useState("loading");
+  const [err,   setErr]    = useState(null);
+  const [pt,    setPt]     = useState(null);
+  const [anc,   setAnc]    = useState({ group: null, label: "Not recorded", source: "none" });
+  const [scores,setScores] = useState([]);
 
   useEffect(() => {
     FHIR.oauth2.ready()
-      .then(async (client) => {
-        setStatus("fetching");
+      .then(async client => {
+        setPhase("fetching");
+        const patient = await client.request("Patient/" + client.patient.id);
+        const ancestry = getAncestryFromPatient(patient);
+        setPt(patient); setAnc(ancestry);
 
-        // Fetch patient
-        const pt = await client.request("Patient/" + client.patient.id);
-        setPatient(pt);
-        const anc = getAncestryFromPatient(pt);
-        setAncestry(anc);
-
-        // Fetch conditions (active)
-        let conditions = [];
+        let conds = [], obs = [];
         try {
-          const condBundle = await client.request(
-            `Condition?patient=${client.patient.id}&clinical-status=active`
-          );
-          conditions = condBundle.entry || [];
-        } catch (e) {
-          console.warn("Could not fetch conditions:", e);
-        }
-
-        // Fetch recent observations (last 90 days)
-        let observations = [];
+          const cb = await client.request(`Condition?patient=${client.patient.id}&_count=100`);
+          conds = cb.entry || [];
+        } catch(e) {}
         try {
-          const obsBundle = await client.request(
-            `Observation?patient=${client.patient.id}&_sort=-date&_count=50`
-          );
-          observations = obsBundle.entry || [];
-        } catch (e) {
-          console.warn("Could not fetch observations:", e);
-        }
+          const ob = await client.request(`Observation?patient=${client.patient.id}&_sort=-date&_count=50`);
+          obs = ob.entry || [];
+        } catch(e) {}
 
-        const scores = getRelevantScores(conditions, observations, anc.group);
-        setRelevantScores(scores);
-        setLastUpdated(new Date().toLocaleTimeString());
-        setStatus("ready");
+        setScores(getRelevantScores(conds, obs, ancestry.group));
+        setPhase("ready");
       })
-      .catch((err) => {
-        console.error("FHIR error:", err);
-        setErrorMsg(err.message || "Failed to connect to FHIR server.");
-        setStatus("error");
-      });
+      .catch(e => { setErr(e.message || String(e)); setPhase("error"); });
   }, []);
 
-  if (status === "loading" || status === "fetching") {
-    return React.createElement(LoadingScreen, {
-      message: status === "loading" ? "Connecting to EHR..." : "Loading patient data..."
-    });
-  }
-
-  if (status === "error") {
-    return React.createElement(ErrorScreen, { error: errorMsg });
-  }
+  if (phase === "loading" || phase === "fetching")
+    return React.createElement(Spinner, { msg: phase === "loading" ? "Connecting to EHR..." : "Loading patient data..." });
+  if (phase === "error")
+    return React.createElement(ErrorView, { error: err });
 
   return React.createElement("div", { className: "app" },
 
-    // Top bar
-    React.createElement("div", { className: "topbar" },
-      React.createElement("div", { className: "topbar-brand" },
-        React.createElement("span", { className: "brand-icon" }, "⚖"),
+    React.createElement("header", { className: "header" },
+      React.createElement("div", { className: "header-brand" },
+        React.createElement("div", { className: "brand-mark" }),
         React.createElement("span", { className: "brand-name" }, "EquiScore")
       ),
-      React.createElement("div", { className: "topbar-meta" },
-        lastUpdated && `Updated ${lastUpdated}`
-      )
+      React.createElement("div", { className: "header-sub" }, "Clinical Risk Score Equity Analysis")
     ),
 
-    // Main content
-    React.createElement("div", { className: "main-content" },
+    React.createElement("main", { className: "main" },
 
-      patient && React.createElement(PatientHeader, { patient, ancestry }),
+      pt && React.createElement(PatientBar, { patient: pt, ancestry: anc }),
 
-      React.createElement(AncestryWarning, { ancestry }),
+      !anc.group && React.createElement("div", { className: "notice-missing" },
+        React.createElement("strong", null, "Ancestry not documented. "),
+        "Race and ethnicity are not recorded in this patient record using US Core standards. Equity analysis cannot be personalized. Documenting ancestry enables patient-specific guidance."
+      ),
 
-      relevantScores.length > 0 && React.createElement(SummaryBanner, { relevantScores, ancestry }),
+      scores.length > 0 && React.createElement(SummaryBanner, { relevantScores: scores, ancestry: anc }),
 
-      React.createElement("div", { className: "section-header" },
-        React.createElement("h2", null, "Risk Score Equity Analysis"),
-        React.createElement("p", { className: "section-subtitle" },
-          relevantScores.length > 0
-            ? `${relevantScores.length} relevant score${relevantScores.length > 1 ? "s" : ""} detected based on active conditions and recent labs`
-            : "No relevant scores detected"
+      React.createElement("div", { className: "section-head" },
+        React.createElement("h2", null, "Detected risk scores"),
+        React.createElement("p", null,
+          scores.length > 0
+            ? `${scores.length} score${scores.length > 1 ? "s" : ""} identified from active conditions and recent labs`
+            : "No scores detected — no matching conditions or labs found in this record"
         )
       ),
 
-      relevantScores.length > 0
-        ? React.createElement("div", { className: "scores-grid" },
-            relevantScores.map(sd =>
-              React.createElement(ScoreCard, { key: sd.score.id, scoreData: sd })
-            )
+      scores.length > 0
+        ? React.createElement("div", { className: "cards" },
+            scores.map(sd => React.createElement(ScoreCard, { key: sd.score.id, sd }))
           )
-        : React.createElement(NoScoresFound, { ancestry }),
+        : React.createElement("div", { className: "no-scores" },
+            React.createElement("p", null, "No active conditions or recent labs in this record match the trigger criteria for ASCVD, HEART Score, CURB-65, Wells DVT, or CHA"), 
+            React.createElement("span", null, "\u2082DS\u2082-VASc. Try a patient with hypertension, diabetes, chest pain, atrial fibrillation, or pneumonia.")
+          ),
 
-      // Footer
-      React.createElement("div", { className: "footer" },
+      React.createElement("footer", { className: "footer" },
         React.createElement("p", null,
-          "EquiScore surfaces published equity concerns about clinical risk scores. " +
-          "This tool does not replace clinical judgment. All flags are based on peer-reviewed literature."
+          "EquiScore surfaces published equity evidence about clinical risk scores. This tool does not replace clinical judgment."
         ),
         React.createElement("p", null,
-          "Sources: Yadlowsky et al. 2018 Ann Intern Med · Backus et al. 2010 · Lim et al. 2003 Thorax · Lip et al. 2010 Chest · Wells et al. 1997"
+          "Evidence base: Yadlowsky et al. 2018 · Essien et al. 2020 · Chao et al. 2016 · Khan et al. 2022 · Mora & Libby 2022 · Parpia et al. 2017"
         )
       )
     )
